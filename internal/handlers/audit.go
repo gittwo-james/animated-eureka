@@ -1,167 +1,135 @@
 package handlers
 
 import (
-	"net/http"
-	"strconv"
+    "net/http"
+    "strconv"
 
-	"citadel-drive/internal/middleware"
-	"citadel-drive/internal/repositories"
+    "citadel-drive/internal/config"
+    "citadel-drive/internal/middleware"
+    "citadel-drive/internal/repositories"
+    "citadel-drive/internal/utils"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
+    "github.com/gin-gonic/gin"
+    "github.com/google/uuid"
+    "go.uber.org/zap"
+    "gorm.io/gorm"
 )
 
 type AuditHandler struct {
-	DB        *gorm.DB
-	Log       *zap.Logger
-	JWTSecret string
+    DB        *gorm.DB
+    Config    config.Config
+    Log       *zap.Logger
+    AuditRepo *repositories.AuditRepository
 }
 
 func (h *AuditHandler) Register(r *gin.Engine) {
-	protected := r.Group("/audit")
-	protected.Use(middleware.JWTAuth(h.DB, h.JWTSecret))
+    g := r.Group("/audit-logs")
+    g.Use(middleware.JWTAuth(h.DB, h.Config.JWTAccessSecret))
 
-	protected.GET("/logs", h.GetRecentAuditLogs)
-	protected.GET("/resource/:resourceId", h.GetResourceAuditLogs)
-	protected.GET("/user/:userId", h.GetUserAuditLogs)
+    g.GET("", middleware.RequireRole("admin"), h.List)
+    g.GET("/user/:userId", h.ListByUser)
+    g.GET("/file/:fileId", middleware.RequireRole("admin"), h.ListByFile)
+    g.GET("/search", middleware.RequireRole("admin"), h.List) // Reuse List for search
 }
 
-func (h *AuditHandler) GetRecentAuditLogs(c *gin.Context) {
-	limit := c.DefaultQuery("limit", "50")
-	limitNum, _ := strconv.Atoi(limit)
+func (h *AuditHandler) List(c *gin.Context) {
+    limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+    offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+    limit, offset = utils.ValidatePaginationParams(limit, offset)
 
-	if limitNum < 1 || limitNum > 200 {
-		limitNum = 50
-	}
+    filter := make(map[string]interface{})
+    if uid := c.Query("user_id"); uid != "" {
+        filter["user_id"] = uid
+    }
+    if action := c.Query("action"); action != "" {
+        filter["action"] = action
+    }
+    if resType := c.Query("resource_type"); resType != "" {
+        filter["resource_type"] = resType
+    }
+    if resID := c.Query("resource_id"); resID != "" {
+        filter["resource_id"] = resID
+    }
 
-	auditRepo := repositories.NewAuditRepository(h.DB)
-	logs, err := auditRepo.GetRecentAuditLogs(limitNum)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get audit logs"})
-		h.Log.Error("failed to get recent audit logs", zap.Error(err))
-		return
-	}
+    logs, total, err := h.AuditRepo.List(filter, limit, offset)
+    if err != nil {
+        h.Log.Error("failed to fetch audit logs", zap.Error(err))
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch logs"})
+        return
+    }
 
-	var result []map[string]interface{}
-	for _, log := range logs {
-		result = append(result, map[string]interface{}{
-			"id":            log.ID,
-			"user_id":       log.UserID,
-			"action":        log.Action,
-			"resource_type": log.ResourceType,
-			"resource_id":   log.ResourceID,
-			"ip_address":    log.IPAddress,
-			"user_agent":    log.UserAgent,
-			"metadata":      log.Metadata,
-			"created_at":    log.CreatedAt,
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{"logs": result})
+    c.JSON(http.StatusOK, gin.H{"data": logs, "total": total, "limit": limit, "offset": offset})
 }
 
-func (h *AuditHandler) GetResourceAuditLogs(c *gin.Context) {
-	resourceIDStr := c.Param("resourceId")
-	if resourceIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "resource id required"})
-		return
-	}
+func (h *AuditHandler) ListByUser(c *gin.Context) {
+    userIDStr := c.Param("userId")
+    userID, err := uuid.Parse(userIDStr)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+        return
+    }
 
-	resourceID, err := uuid.Parse(resourceIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource id"})
-		return
-	}
+    // Security check: only admin or the user themselves can view this
+    currentUserID := h.getUserID(c)
+    currentRole := h.getUserRole(c)
 
-	limit := c.DefaultQuery("limit", "50")
-	offset := c.DefaultQuery("offset", "0")
+    if currentRole != "admin" && currentUserID != userID {
+        c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+        return
+    }
 
-	limitNum, _ := strconv.Atoi(limit)
-	offsetNum, _ := strconv.Atoi(offset)
+    limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+    offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+    limit, offset = utils.ValidatePaginationParams(limit, offset)
 
-	if limitNum < 1 || limitNum > 200 {
-		limitNum = 50
-	}
-	if offsetNum < 0 {
-		offsetNum = 0
-	}
+    logs, err := h.AuditRepo.GetByUserID(userID, limit, offset)
+    if err != nil {
+        h.Log.Error("failed to fetch user audit logs", zap.Error(err), zap.String("user_id", userIDStr))
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch logs"})
+        return
+    }
 
-	auditRepo := repositories.NewAuditRepository(h.DB)
-	logs, err := auditRepo.GetAuditLogs(resourceID, limitNum, offsetNum)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get audit logs"})
-		h.Log.Error("failed to get resource audit logs", zap.Error(err))
-		return
-	}
-
-	var result []map[string]interface{}
-	for _, log := range logs {
-		result = append(result, map[string]interface{}{
-			"id":            log.ID,
-			"user_id":       log.UserID,
-			"action":        log.Action,
-			"resource_type": log.ResourceType,
-			"resource_id":   log.ResourceID,
-			"ip_address":    log.IPAddress,
-			"user_agent":    log.UserAgent,
-			"metadata":      log.Metadata,
-			"created_at":    log.CreatedAt,
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{"logs": result})
+    c.JSON(http.StatusOK, gin.H{"data": logs})
 }
 
-func (h *AuditHandler) GetUserAuditLogs(c *gin.Context) {
-	userIDStr := c.Param("userId")
-	if userIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "user id required"})
-		return
-	}
+func (h *AuditHandler) ListByFile(c *gin.Context) {
+    fileIDStr := c.Param("fileId")
+    fileID, err := uuid.Parse(fileIDStr)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+        return
+    }
 
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
-		return
-	}
+    limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+    offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+    limit, offset = utils.ValidatePaginationParams(limit, offset)
 
-	limit := c.DefaultQuery("limit", "50")
-	offset := c.DefaultQuery("offset", "0")
+    logs, err := h.AuditRepo.GetByResourceID(fileID, limit, offset)
+    if err != nil {
+        h.Log.Error("failed to fetch file audit logs", zap.Error(err), zap.String("file_id", fileIDStr))
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch logs"})
+        return
+    }
 
-	limitNum, _ := strconv.Atoi(limit)
-	offsetNum, _ := strconv.Atoi(offset)
+    c.JSON(http.StatusOK, gin.H{"data": logs})
+}
 
-	if limitNum < 1 || limitNum > 200 {
-		limitNum = 50
-	}
-	if offsetNum < 0 {
-		offsetNum = 0
-	}
+func (h *AuditHandler) getUserID(c *gin.Context) uuid.UUID {
+    idStr, exists := c.Get(middleware.ContextUserID)
+    if !exists {
+        return uuid.Nil
+    }
+    id, err := uuid.Parse(idStr.(string))
+    if err != nil {
+        return uuid.Nil
+    }
+    return id
+}
 
-	auditRepo := repositories.NewAuditRepository(h.DB)
-	logs, err := auditRepo.GetUserAuditLogs(userID, limitNum, offsetNum)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get audit logs"})
-		h.Log.Error("failed to get user audit logs", zap.Error(err))
-		return
-	}
-
-	var result []map[string]interface{}
-	for _, log := range logs {
-		result = append(result, map[string]interface{}{
-			"id":            log.ID,
-			"user_id":       log.UserID,
-			"action":        log.Action,
-			"resource_type": log.ResourceType,
-			"resource_id":   log.ResourceID,
-			"ip_address":    log.IPAddress,
-			"user_agent":    log.UserAgent,
-			"metadata":      log.Metadata,
-			"created_at":    log.CreatedAt,
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{"logs": result})
+func (h *AuditHandler) getUserRole(c *gin.Context) string {
+    role, exists := c.Get(middleware.ContextRole)
+    if !exists {
+        return ""
+    }
+    return role.(string)
 }

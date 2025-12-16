@@ -12,6 +12,7 @@ import (
     "citadel-drive/internal/handlers"
     "citadel-drive/internal/middleware"
     "citadel-drive/internal/repositories"
+    "citadel-drive/internal/services"
     "citadel-drive/internal/utils"
 
     "github.com/gin-gonic/gin"
@@ -71,6 +72,15 @@ func main() {
         }
     }()
 
+    // Initialize Repositories
+    fileRepo := repositories.NewFileRepository(dbConn.Gorm)
+    encKeyRepo := repositories.NewEncryptionKeyRepository(dbConn.Gorm)
+    auditRepo := repositories.NewAuditRepository(dbConn.Gorm)
+
+    // Initialize Services
+    storageService := services.NewStorageService("/tmp/citadel-drive-storage")
+
+    // Register Handlers
     health := handlers.HealthHandler{DB: dbConn.Gorm}
     health.Register(router)
 
@@ -83,8 +93,31 @@ func main() {
     roles := handlers.RoleHandler{DB: dbConn.Gorm, Log: log, JWTSecret: cfg.JWTAccessSecret}
     roles.Register(router)
 
-    audit := handlers.AuditHandler{DB: dbConn.Gorm, Log: log, JWTSecret: cfg.JWTAccessSecret}
-    audit.Register(router)
+    fileHandler := handlers.FileHandler{
+        DB:         dbConn.Gorm,
+        Config:     cfg,
+        Log:        log,
+        FileRepo:   fileRepo,
+        EncKeyRepo: encKeyRepo,
+        AuditRepo:  auditRepo,
+        Storage:    storageService,
+    }
+    fileHandler.Register(router)
+
+    auditHandler := handlers.AuditHandler{
+        DB:        dbConn.Gorm,
+        Config:    cfg,
+        Log:       log,
+        AuditRepo: auditRepo,
+    }
+    auditHandler.Register(router)
+
+    adminHandler := handlers.AdminHandler{
+        DB:     dbConn.Gorm,
+        Config: cfg,
+        Log:    log,
+    }
+    adminHandler.Register(router)
 
     srv := &http.Server{
         Addr:              ":" + cfg.AppPort,

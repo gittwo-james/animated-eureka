@@ -48,27 +48,24 @@ type User struct {
 
 type Folder struct {
     ID             uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
-    ParentID       *uuid.UUID     `gorm:"type:uuid;index"`
-    OwnerID        uuid.UUID      `gorm:"type:uuid;not null;index"`
-    OrganizationID uuid.UUID      `gorm:"type:uuid;not null;index"`
     Name           string         `gorm:"not null;index"`
-    Description    string         `gorm:"type:text"`
+    ParentID       *uuid.UUID     `gorm:"type:uuid;index"`
+    OrganizationID uuid.UUID      `gorm:"type:uuid;not null;index"`
     CreatedAt      time.Time      `gorm:"not null;autoCreateTime;index"`
     UpdatedAt      time.Time      `gorm:"not null;autoUpdateTime"`
     DeletedAt      gorm.DeletedAt `gorm:"index"`
 
-    Parent       *Folder         `gorm:"foreignKey:ParentID;references:ID"`
-    Owner        User            `gorm:"foreignKey:OwnerID"`
-    Organization Organization    `gorm:"foreignKey:OrganizationID"`
-    Permissions  []Permission    `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
-    Files        []File          `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+    Organization Organization `gorm:"foreignKey:OrganizationID"`
+    Parent       *Folder      `gorm:"foreignKey:ParentID"`
+    Children     []Folder     `gorm:"foreignKey:ParentID"`
+    Files        []File       `gorm:"foreignKey:FolderID"`
 }
 
 type File struct {
     ID              uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
-    FolderID        *uuid.UUID     `gorm:"type:uuid;index"`
     OwnerID         uuid.UUID      `gorm:"type:uuid;not null;index"`
     OrganizationID  uuid.UUID      `gorm:"type:uuid;not null;index"`
+    FolderID        *uuid.UUID     `gorm:"type:uuid;index"`
     Name            string         `gorm:"not null;index"`
     Description     string         `gorm:"type:text"`
     FileType        string         `gorm:"not null;index"`
@@ -79,13 +76,12 @@ type File struct {
     UpdatedAt       time.Time      `gorm:"not null;autoUpdateTime"`
     DeletedAt       gorm.DeletedAt `gorm:"index"`
 
-    Folder       *Folder         `gorm:"foreignKey:FolderID"`
-    Owner        User            `gorm:"foreignKey:OwnerID"`
-    Organization Organization    `gorm:"foreignKey:OrganizationID"`
-    Versions     []FileVersion   `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
-    Permissions  []Permission    `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
-    Tags         []FileTag       `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
-    SharedTokens []SharedToken   `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+    Owner        User          `gorm:"foreignKey:OwnerID"`
+    Organization Organization  `gorm:"foreignKey:OrganizationID"`
+    Versions     []FileVersion `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+    Permissions  []Permission  `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+    Tags         []FileTag     `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+    SharedTokens []SharedToken `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 
     CurrentEncryptionKey *EncryptionKey  `gorm:"foreignKey:EncryptionKeyID;references:ID"`
     EncryptionKeys       []EncryptionKey `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
@@ -110,16 +106,12 @@ type Permission struct {
     UserID         uuid.UUID  `gorm:"type:uuid;not null;index"`
     FileID         *uuid.UUID `gorm:"type:uuid;index"`
     FolderID       *uuid.UUID `gorm:"type:uuid;index"`
-    PermissionType string     `gorm:"not null;index"` // read, write, update, delete, admin
-    GrantedBy      *uuid.UUID `gorm:"type:uuid;index"` // User who granted this permission
+    PermissionType string     `gorm:"not null;index"`
     ExpiresAt      *time.Time `gorm:"index"`
     CreatedAt      time.Time  `gorm:"not null;autoCreateTime;index"`
-    UpdatedAt      time.Time  `gorm:"not null;autoUpdateTime"`
 
-    User      User    `gorm:"foreignKey:UserID"`
-    File      *File   `gorm:"foreignKey:FileID"`
-    Folder    *Folder `gorm:"foreignKey:FolderID"`
-    GrantedByUser *User `gorm:"foreignKey:GrantedBy;references:ID"`
+    User User  `gorm:"foreignKey:UserID"`
+    File *File `gorm:"foreignKey:FileID"`
 }
 
 type UserPermission struct {
