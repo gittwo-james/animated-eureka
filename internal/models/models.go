@@ -48,6 +48,7 @@ type User struct {
 
 type Folder struct {
     ID             uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+    OwnerID        uuid.UUID      `gorm:"type:uuid;not null;index"`
     Name           string         `gorm:"not null;index"`
     ParentID       *uuid.UUID     `gorm:"type:uuid;index"`
     OrganizationID uuid.UUID      `gorm:"type:uuid;not null;index"`
@@ -56,6 +57,7 @@ type Folder struct {
     DeletedAt      gorm.DeletedAt `gorm:"index"`
 
     Organization Organization `gorm:"foreignKey:OrganizationID"`
+    Owner        User         `gorm:"foreignKey:OwnerID"`
     Parent       *Folder      `gorm:"foreignKey:ParentID"`
     Children     []Folder     `gorm:"foreignKey:ParentID"`
     Files        []File       `gorm:"foreignKey:FolderID"`
@@ -101,12 +103,36 @@ type FileVersion struct {
     File File `gorm:"foreignKey:FileID"`
 }
 
+type FileUploadSession struct {
+    ID             uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+    FileID         uuid.UUID `gorm:"type:uuid;not null;index"`
+    OrganizationID uuid.UUID `gorm:"type:uuid;not null;index"`
+    CreatedBy      uuid.UUID `gorm:"type:uuid;not null;index"`
+
+    StoragePathR2 string  `gorm:"not null"`
+    IsMultipart   bool    `gorm:"not null;default:false;index"`
+    R2UploadID    *string `gorm:"type:text"`
+
+    ExpectedSize int64  `gorm:"not null"`
+    ContentType  string `gorm:"not null"`
+    PartSize     int64  `gorm:"not null;default:0"`
+
+    Status      string     `gorm:"not null;index"`
+    LastError   *string    `gorm:"type:text"`
+    CompletedAt *time.Time `gorm:"index"`
+    CreatedAt   time.Time  `gorm:"not null;autoCreateTime;index"`
+    UpdatedAt   time.Time  `gorm:"not null;autoUpdateTime"`
+
+    File File `gorm:"foreignKey:FileID"`
+}
+
 type Permission struct {
     ID             uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
     UserID         uuid.UUID  `gorm:"type:uuid;not null;index"`
     FileID         *uuid.UUID `gorm:"type:uuid;index"`
     FolderID       *uuid.UUID `gorm:"type:uuid;index"`
     PermissionType string     `gorm:"not null;index"`
+    GrantedBy      *uuid.UUID `gorm:"type:uuid;index"`
     ExpiresAt      *time.Time `gorm:"index"`
     CreatedAt      time.Time  `gorm:"not null;autoCreateTime;index"`
 

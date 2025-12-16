@@ -2,6 +2,7 @@ package main
 
 import (
     "context"
+    "errors"
     "net/http"
     "os"
     "os/signal"
@@ -13,6 +14,7 @@ import (
     "citadel-drive/internal/middleware"
     "citadel-drive/internal/repositories"
     "citadel-drive/internal/services"
+    "citadel-drive/internal/storage/r2"
     "citadel-drive/internal/utils"
 
     "github.com/gin-gonic/gin"
@@ -80,6 +82,15 @@ func main() {
     // Initialize Services
     storageService := services.NewStorageService("/tmp/citadel-drive-storage")
 
+    r2Client, err := r2.New(cfg)
+    if err != nil {
+        if errors.Is(err, r2.ErrNotConfigured) {
+            log.Warn("r2 not configured; r2 file upload/download disabled")
+        } else {
+            log.Fatal("failed to initialize r2 client", zap.Error(err))
+        }
+    }
+
     // Register Handlers
     health := handlers.HealthHandler{DB: dbConn.Gorm}
     health.Register(router)
@@ -103,6 +114,9 @@ func main() {
         Storage:    storageService,
     }
     fileHandler.Register(router)
+
+    r2Ops := handlers.R2FileOpsHandler{DB: dbConn.Gorm, Config: cfg, Log: log, R2: r2Client, FileRepo: fileRepo, Audit: auditRepo}
+    r2Ops.Register(router)
 
     auditHandler := handlers.AuditHandler{
         DB:        dbConn.Gorm,
