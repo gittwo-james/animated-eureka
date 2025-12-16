@@ -46,10 +46,26 @@ type User struct {
     BackupCodes  []UserBackupCode `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 }
 
+type Folder struct {
+    ID             uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+    Name           string         `gorm:"not null;index"`
+    ParentID       *uuid.UUID     `gorm:"type:uuid;index"`
+    OrganizationID uuid.UUID      `gorm:"type:uuid;not null;index"`
+    CreatedAt      time.Time      `gorm:"not null;autoCreateTime;index"`
+    UpdatedAt      time.Time      `gorm:"not null;autoUpdateTime"`
+    DeletedAt      gorm.DeletedAt `gorm:"index"`
+
+    Organization Organization `gorm:"foreignKey:OrganizationID"`
+    Parent       *Folder      `gorm:"foreignKey:ParentID"`
+    Children     []Folder     `gorm:"foreignKey:ParentID"`
+    Files        []File       `gorm:"foreignKey:FolderID"`
+}
+
 type File struct {
     ID              uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
     OwnerID         uuid.UUID      `gorm:"type:uuid;not null;index"`
     OrganizationID  uuid.UUID      `gorm:"type:uuid;not null;index"`
+    FolderID        *uuid.UUID     `gorm:"type:uuid;index"`
     Name            string         `gorm:"not null;index"`
     Description     string         `gorm:"type:text"`
     FileType        string         `gorm:"not null;index"`
@@ -99,11 +115,11 @@ type FileUploadSession struct {
     ContentType  string `gorm:"not null"`
     PartSize     int64  `gorm:"not null;default:0"`
 
-    Status       string     `gorm:"not null;index"`
-    LastError    *string    `gorm:"type:text"`
-    CompletedAt  *time.Time `gorm:"index"`
-    CreatedAt    time.Time  `gorm:"not null;autoCreateTime;index"`
-    UpdatedAt    time.Time  `gorm:"not null;autoUpdateTime"`
+    Status      string     `gorm:"not null;index"`
+    LastError   *string    `gorm:"type:text"`
+    CompletedAt *time.Time `gorm:"index"`
+    CreatedAt   time.Time  `gorm:"not null;autoCreateTime;index"`
+    UpdatedAt   time.Time  `gorm:"not null;autoUpdateTime"`
 
     File File `gorm:"foreignKey:FileID"`
 }

@@ -13,6 +13,7 @@ import (
     "citadel-drive/internal/handlers"
     "citadel-drive/internal/middleware"
     "citadel-drive/internal/repositories"
+    "citadel-drive/internal/services"
     "citadel-drive/internal/storage/r2"
     "citadel-drive/internal/utils"
 
@@ -58,23 +59,79 @@ func main() {
         router.GET("/metrics", gin.WrapH(promhttp.Handler()))
     }
 
+    // Initialize permission cache
+    permCache := repositories.NewPermissionCache()
+
+    // Start permission expiration cleanup job (every 1 hour)
+    go func() {
+        ticker := time.NewTicker(1 * time.Hour)
+        defer ticker.Stop()
+        for range ticker.C {
+            permRepo := repositories.NewPermissionRepository(dbConn.Gorm)
+            if err := permRepo.InvalidateExpiredPermissions(); err != nil {
+                log.Error("failed to invalidate expired permissions", zap.Error(err))
+            }
+        }
+    }()
+
+    // Initialize Repositories
+    fileRepo := repositories.NewFileRepository(dbConn.Gorm)
+    encKeyRepo := repositories.NewEncryptionKeyRepository(dbConn.Gorm)
+    auditRepo := repositories.NewAuditRepository(dbConn.Gorm)
+
+    // Initialize Services
+    storageService := services.NewStorageService("/tmp/citadel-drive-storage")
+
+    r2Client, err := r2.New(cfg)
+    if err != nil {
+        if errors.Is(err, r2.ErrNotConfigured) {
+            log.Warn("r2 not configured; r2 file upload/download disabled")
+        } else {
+            log.Fatal("failed to initialize r2 client", zap.Error(err))
+        }
+    }
+
+    // Register Handlers
     health := handlers.HealthHandler{DB: dbConn.Gorm}
     health.Register(router)
 
     auth := handlers.AuthHandler{DB: dbConn.Gorm, Config: cfg, Log: log}
     auth.Register(router)
 
-    r2Client, err := r2.New(cfg)
-    if err != nil {
-        if errors.Is(err, r2.ErrNotConfigured) {
-            log.Warn("r2 not configured; file uploads/downloads disabled")
-        } else {
-            log.Fatal("failed to initialize r2 client", zap.Error(err))
-        }
-    }
+    perms := handlers.PermissionHandler{DB: dbConn.Gorm, Log: log, Cache: permCache, JWTSecret: cfg.JWTAccessSecret}
+    perms.Register(router)
 
-    files := handlers.FileHandler{DB: dbConn.Gorm, Config: cfg, Log: log, R2: r2Client}
-    files.Register(router)
+    roles := handlers.RoleHandler{DB: dbConn.Gorm, Log: log, JWTSecret: cfg.JWTAccessSecret}
+    roles.Register(router)
+
+    fileHandler := handlers.FileHandler{
+        DB:         dbConn.Gorm,
+        Config:     cfg,
+        Log:        log,
+        FileRepo:   fileRepo,
+        EncKeyRepo: encKeyRepo,
+        AuditRepo:  auditRepo,
+        Storage:    storageService,
+    }
+    fileHandler.Register(router)
+
+    r2Ops := handlers.R2FileOpsHandler{DB: dbConn.Gorm, Config: cfg, Log: log, R2: r2Client, FileRepo: fileRepo, Audit: auditRepo}
+    r2Ops.Register(router)
+
+    auditHandler := handlers.AuditHandler{
+        DB:        dbConn.Gorm,
+        Config:    cfg,
+        Log:       log,
+        AuditRepo: auditRepo,
+    }
+    auditHandler.Register(router)
+
+    adminHandler := handlers.AdminHandler{
+        DB:     dbConn.Gorm,
+        Config: cfg,
+        Log:    log,
+    }
+    adminHandler.Register(router)
 
     srv := &http.Server{
         Addr:              ":" + cfg.AppPort,
