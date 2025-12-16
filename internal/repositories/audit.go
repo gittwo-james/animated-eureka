@@ -20,7 +20,14 @@ func NewAuditRepository(db *gorm.DB) *AuditRepository {
 }
 
 func (r *AuditRepository) Log(userID *uuid.UUID, action, resourceType string, resourceID uuid.UUID, ip, userAgent string, metadata map[string]interface{}) error {
-    metaBytes, _ := json.Marshal(metadata)
+    var metaBytes []byte
+    var err error
+    if metadata != nil {
+        metaBytes, err = json.Marshal(metadata)
+        if err != nil {
+            return err
+        }
+    }
     logEntry := models.AuditLog{
         UserID:       userID,
         Action:       action,
