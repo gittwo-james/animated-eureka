@@ -115,15 +115,23 @@ func (h *AuditHandler) ListByFile(c *gin.Context) {
 }
 
 func (h *AuditHandler) getUserID(c *gin.Context) uuid.UUID {
-    idStr, exists := c.Get(middleware.ContextUserID)
+    v, exists := c.Get(middleware.ContextUserID)
     if !exists {
         return uuid.Nil
     }
-    id, err := uuid.Parse(idStr.(string))
-    if err != nil {
+
+    switch t := v.(type) {
+    case uuid.UUID:
+        return t
+    case string:
+        id, err := uuid.Parse(t)
+        if err != nil {
+            return uuid.Nil
+        }
+        return id
+    default:
         return uuid.Nil
     }
-    return id
 }
 
 func (h *AuditHandler) getUserRole(c *gin.Context) string {

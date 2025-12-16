@@ -48,6 +48,7 @@ type User struct {
 
 type Folder struct {
     ID             uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+    OwnerID        uuid.UUID      `gorm:"type:uuid;not null;index"`
     Name           string         `gorm:"not null;index"`
     ParentID       *uuid.UUID     `gorm:"type:uuid;index"`
     OrganizationID uuid.UUID      `gorm:"type:uuid;not null;index"`
@@ -56,6 +57,7 @@ type Folder struct {
     DeletedAt      gorm.DeletedAt `gorm:"index"`
 
     Organization Organization `gorm:"foreignKey:OrganizationID"`
+    Owner        User         `gorm:"foreignKey:OwnerID"`
     Parent       *Folder      `gorm:"foreignKey:ParentID"`
     Children     []Folder     `gorm:"foreignKey:ParentID"`
     Files        []File       `gorm:"foreignKey:FolderID"`
@@ -130,6 +132,7 @@ type Permission struct {
     FileID         *uuid.UUID `gorm:"type:uuid;index"`
     FolderID       *uuid.UUID `gorm:"type:uuid;index"`
     PermissionType string     `gorm:"not null;index"`
+    GrantedBy      *uuid.UUID `gorm:"type:uuid;index"`
     ExpiresAt      *time.Time `gorm:"index"`
     CreatedAt      time.Time  `gorm:"not null;autoCreateTime;index"`
 

@@ -896,13 +896,21 @@ func (h AuthHandler) currentUserID(c *gin.Context) (uuid.UUID, bool) {
         c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
         return uuid.Nil, false
     }
-    uidStr, _ := v.(string)
-    uid, err := uuid.Parse(uidStr)
-    if err != nil {
+
+    switch t := v.(type) {
+    case uuid.UUID:
+        return t, true
+    case string:
+        uid, err := uuid.Parse(t)
+        if err != nil {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+            return uuid.Nil, false
+        }
+        return uid, true
+    default:
         c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
         return uuid.Nil, false
     }
-    return uid, true
 }
 
 func (h AuthHandler) userRole(userID uuid.UUID, orgID uuid.UUID) string {

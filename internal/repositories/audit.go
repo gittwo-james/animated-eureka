@@ -85,3 +85,33 @@ func (r *AuditRepository) GetByResourceID(resourceID uuid.UUID, limit, offset in
     err := r.DB.Where("resource_id = ?", resourceID).Order("created_at desc").Limit(limit).Offset(offset).Find(&logs).Error
     return logs, err
 }
+
+func (r *AuditRepository) LogPermissionGranted(grantedBy *uuid.UUID, granteeID uuid.UUID, fileOrFolderID uuid.UUID, permissionType string, isFolder bool, ip, userAgent string) error {
+    resourceType := "file"
+    if isFolder {
+        resourceType = "folder"
+    }
+
+    meta := map[string]interface{}{
+        "grantee_user_id":  granteeID.String(),
+        "permission_type":  permissionType,
+        "is_folder":        isFolder,
+        "file_or_folder_id": fileOrFolderID.String(),
+    }
+
+    return r.Log(grantedBy, "permission_granted", resourceType, fileOrFolderID, ip, userAgent, meta)
+}
+
+func (r *AuditRepository) LogPermissionRevoked(revokedBy *uuid.UUID, permissionID uuid.UUID, ip, userAgent string) error {
+    return r.Log(revokedBy, "permission_revoked", "permission", permissionID, ip, userAgent, nil)
+}
+
+func (r *AuditRepository) LogRoleAssigned(assignedBy *uuid.UUID, userID uuid.UUID, role string, organizationID uuid.UUID, ip, userAgent string) error {
+    meta := map[string]interface{}{
+        "user_id":         userID.String(),
+        "role":            role,
+        "organization_id": organizationID.String(),
+    }
+
+    return r.Log(assignedBy, "role_assigned", "organization", organizationID, ip, userAgent, meta)
+}
