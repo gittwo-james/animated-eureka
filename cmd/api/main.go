@@ -57,6 +57,21 @@ func main() {
         router.GET("/metrics", gin.WrapH(promhttp.Handler()))
     }
 
+    // Initialize permission cache
+    permCache := repositories.NewPermissionCache()
+
+    // Start permission expiration cleanup job (every 1 hour)
+    go func() {
+        ticker := time.NewTicker(1 * time.Hour)
+        defer ticker.Stop()
+        for range ticker.C {
+            permRepo := repositories.NewPermissionRepository(dbConn.Gorm)
+            if err := permRepo.InvalidateExpiredPermissions(); err != nil {
+                log.Error("failed to invalidate expired permissions", zap.Error(err))
+            }
+        }
+    }()
+
     // Initialize Repositories
     fileRepo := repositories.NewFileRepository(dbConn.Gorm)
     encKeyRepo := repositories.NewEncryptionKeyRepository(dbConn.Gorm)
@@ -71,6 +86,12 @@ func main() {
 
     auth := handlers.AuthHandler{DB: dbConn.Gorm, Config: cfg, Log: log}
     auth.Register(router)
+
+    perms := handlers.PermissionHandler{DB: dbConn.Gorm, Log: log, Cache: permCache, JWTSecret: cfg.JWTAccessSecret}
+    perms.Register(router)
+
+    roles := handlers.RoleHandler{DB: dbConn.Gorm, Log: log, JWTSecret: cfg.JWTAccessSecret}
+    roles.Register(router)
 
     fileHandler := handlers.FileHandler{
         DB:         dbConn.Gorm,
