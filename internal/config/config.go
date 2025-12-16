@@ -2,6 +2,7 @@ package config
 
 import (
     "fmt"
+    "strings"
 
     "citadel-drive/internal/utils"
 )
@@ -31,6 +32,19 @@ type Config struct {
     AutoMigrate    bool
     MetricsEnabled bool
     LogLevel       string
+
+    R2Endpoint        string
+    R2Region          string
+    R2Bucket          string
+    R2AccessKeyID     string
+    R2SecretAccessKey string
+    R2PresignTTL      int
+    R2MaxAttempts     int
+
+    FileAllowedTypes            []string
+    FileMaxVersions             int
+    FileMultipartPartSizeMB     int
+    FileMultipartPresignBatchSz int
 }
 
 func Load() Config {
@@ -59,6 +73,19 @@ func Load() Config {
         AutoMigrate:    utils.GetEnvBool("AUTO_MIGRATE", false),
         MetricsEnabled: utils.GetEnvBool("METRICS_ENABLED", true),
         LogLevel:       utils.GetEnv("LOG_LEVEL", "info"),
+
+        R2Endpoint:        utils.GetEnv("R2_ENDPOINT", ""),
+        R2Region:          utils.GetEnv("R2_REGION", "auto"),
+        R2Bucket:          utils.GetEnv("R2_BUCKET", ""),
+        R2AccessKeyID:     utils.GetEnv("R2_ACCESS_KEY_ID", ""),
+        R2SecretAccessKey: utils.GetEnv("R2_SECRET_ACCESS_KEY", ""),
+        R2PresignTTL:      utils.GetEnvInt("R2_PRESIGN_TTL_SECONDS", 900),
+        R2MaxAttempts:     utils.GetEnvInt("R2_MAX_ATTEMPTS", 5),
+
+        FileAllowedTypes:            parseCSV(utils.GetEnv("FILE_ALLOWED_TYPES", "application/pdf,image/png,image/jpeg,text/plain")),
+        FileMaxVersions:             utils.GetEnvInt("FILE_MAX_VERSIONS", 50),
+        FileMultipartPartSizeMB:     utils.GetEnvInt("FILE_MULTIPART_PART_SIZE_MB", 10),
+        FileMultipartPresignBatchSz: utils.GetEnvInt("FILE_MULTIPART_PRESIGN_BATCH_SIZE", 100),
     }
 }
 
@@ -77,4 +104,17 @@ func (c Config) PostgresDSN() string {
         c.DBSSLMode,
         c.DBTimeZone,
     )
+}
+
+func parseCSV(v string) []string {
+    parts := strings.Split(v, ",")
+    out := make([]string, 0, len(parts))
+    for _, p := range parts {
+        s := strings.TrimSpace(p)
+        if s == "" {
+            continue
+        }
+        out = append(out, s)
+    }
+    return out
 }

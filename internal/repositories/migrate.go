@@ -16,6 +16,7 @@ func AutoMigrate(db *gorm.DB) error {
         &models.User{},
         &models.File{},
         &models.FileVersion{},
+        &models.FileUploadSession{},
         &models.Permission{},
         &models.UserPermission{},
         &models.AuditLog{},
