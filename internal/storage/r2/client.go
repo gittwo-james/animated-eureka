@@ -238,6 +238,46 @@ func (c *Client) DeleteObject(ctx context.Context, key string) error {
     return err
 }
 
+func (c *Client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+    if c == nil {
+        return nil, ErrNotConfigured
+    }
+
+    objects := make([]string, 0)
+    var marker *string
+
+    for {
+        out, err := c.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+            Bucket: aws.String(c.bucket),
+            Prefix: aws.String(prefix),
+            Marker: marker,
+        })
+        if err != nil {
+            return nil, err
+        }
+
+        for _, obj := range out.Contents {
+            if obj.Key != nil {
+                objects = append(objects, *obj.Key)
+            }
+        }
+
+        if !out.IsTruncated {
+            break
+        }
+
+        marker = out.NextMarker
+        if marker == nil && out.Contents != nil && len(out.Contents) > 0 {
+            lastKey := out.Contents[len(out.Contents)-1].Key
+            if lastKey != nil {
+                marker = lastKey
+            }
+        }
+    }
+
+    return objects, nil
+}
+
 func (c *Client) ListUploadedParts(ctx context.Context, key string, uploadID string) ([]types.Part, error) {
     if c == nil {
         return nil, ErrNotConfigured

@@ -91,6 +91,33 @@ func main() {
         }
     }
 
+    // Start periodic R2 orphan cleanup job (daily at 2 AM)
+    if r2Client != nil {
+        go func() {
+            // Wait for app startup to complete
+            time.Sleep(30 * time.Second)
+            
+            // Run daily at 2 AM
+            now := time.Now()
+            nextRun := time.Date(now.Year(), now.Month(), now.Day()+1, 2, 0, 0, 0, now.Location())
+            if now.Hour() < 2 {
+                nextRun = time.Date(now.Year(), now.Month(), now.Day(), 2, 0, 0, 0, now.Location())
+            }
+            
+            duration := nextRun.Sub(now)
+            time.Sleep(duration)
+            
+            ticker := time.NewTicker(24 * time.Hour)
+            defer ticker.Stop()
+            
+            for range ticker.C {
+                ctx := context.Background()
+                r2Ops := handlers.R2FileOpsHandler{DB: dbConn.Gorm, Config: cfg, Log: log, R2: r2Client, FileRepo: fileRepo, Audit: auditRepo}
+                r2Ops.PeriodicOrphanCleanupJob(ctx)
+            }
+        }()
+    }
+
     // Register Handlers
     health := handlers.HealthHandler{DB: dbConn.Gorm}
     health.Register(router)
