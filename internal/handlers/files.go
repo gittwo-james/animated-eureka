@@ -35,6 +35,14 @@ func (h *FileHandler) Register(r *gin.Engine) {
 }
 
 func (h *FileHandler) EncryptFile(c *gin.Context) {
+    if h.DB == nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "database not configured"})
+        return
+    }
+    if h.Storage == nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "storage not configured"})
+        return
+    }
     fileIDStr := c.Param("fileId")
     fileID, err := uuid.Parse(fileIDStr)
     if err != nil {
@@ -130,6 +138,14 @@ func (h *FileHandler) EncryptFile(c *gin.Context) {
 }
 
 func (h *FileHandler) DecryptDownloadFile(c *gin.Context) {
+    if h.DB == nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "database not configured"})
+        return
+    }
+    if h.Storage == nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "storage not configured"})
+        return
+    }
     fileIDStr := c.Param("fileId")
     fileID, err := uuid.Parse(fileIDStr)
     if err != nil {

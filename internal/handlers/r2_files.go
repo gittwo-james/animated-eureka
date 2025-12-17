@@ -490,6 +490,7 @@ func (h *R2FileOpsHandler) CompleteUpload(c *gin.Context) {
     var maxVer int
     if err := tx.Model(&models.FileVersion{}).Where("file_id = ?", session.FileID).
         Select("COALESCE(MAX(version_number), 0)").Scan(&maxVer).Error; err != nil {
+        h.cleanupUploadSession(ctx, &session, tx)
         tx.Rollback()
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to determine version"})
         return
@@ -507,6 +508,7 @@ func (h *R2FileOpsHandler) CompleteUpload(c *gin.Context) {
         CreatedAt:     now,
     }
     if err := tx.Create(&version).Error; err != nil {
+        h.cleanupUploadSession(ctx, &session, tx)
         tx.Rollback()
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create file version"})
         return
@@ -514,6 +516,7 @@ func (h *R2FileOpsHandler) CompleteUpload(c *gin.Context) {
 
     if err := tx.Model(&models.File{}).Where("id = ?", session.FileID).
         Updates(map[string]interface{}{"size": size, "file_type": session.ContentType, "storage_path_r2": session.StoragePathR2}).Error; err != nil {
+        h.cleanupUploadSession(ctx, &session, tx)
         tx.Rollback()
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update file"})
         return
@@ -521,6 +524,7 @@ func (h *R2FileOpsHandler) CompleteUpload(c *gin.Context) {
 
     if err := tx.Model(&models.FileUploadSession{}).Where("id = ?", session.ID).
         Updates(map[string]interface{}{"status": r2UploadStatusCompleted, "completed_at": now}).Error; err != nil {
+        h.cleanupUploadSession(ctx, &session, tx)
         tx.Rollback()
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update session"})
         return
@@ -528,12 +532,14 @@ func (h *R2FileOpsHandler) CompleteUpload(c *gin.Context) {
 
     toDelete, err := h.enforceMaxVersions(tx, session.FileID)
     if err != nil {
+        h.cleanupUploadSession(ctx, &session, tx)
         tx.Rollback()
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enforce version policy"})
         return
     }
 
     if err := tx.Commit().Error; err != nil {
+        h.cleanupUploadSession(ctx, &session, tx)
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to finalize upload"})
         return
     }
@@ -589,6 +595,10 @@ func (h *R2FileOpsHandler) DeleteFile(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "database not configured"})
         return
     }
+    if h.R2 == nil {
+        c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage not configured"})
+        return
+    }
 
     uid, orgID, role, ok := h.currentIdentity(c)
     if !ok {
@@ -612,13 +622,36 @@ func (h *R2FileOpsHandler) DeleteFile(c *gin.Context) {
         return
     }
 
+    // Get all file versions for cleanup
+    var versions []models.FileVersion
+    if err := h.DB.Where("file_id = ?", file.ID).Find(&versions).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get file versions"})
+        return
+    }
+
+    // Delete R2 objects for all versions
+    ctx := c.Request.Context()
+    for _, version := range versions {
+        if err := h.R2.DeleteObject(ctx, version.StoragePathR2); err != nil {
+            h.logError("failed to delete version from R2", err)
+            c.JSON(http.StatusServiceUnavailable, gin.H{"error": "failed to cleanup storage"})
+            return
+        }
+    }
+
+    // Delete upload sessions for this file
+    if err := h.DB.Where("file_id = ?", file.ID).Delete(&models.FileUploadSession{}).Error; err != nil {
+        h.logError("failed to cleanup upload sessions", err)
+    }
+
+    // Delete file (this will cascade delete versions, permissions, etc.)
     if err := h.DB.Delete(&file).Error; err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete file"})
         return
     }
 
-    h.audit(c, &uid, "file_deleted", "file", file.ID, nil)
-    c.JSON(http.StatusOK, gin.H{"status": "ok"})
+    h.audit(c, &uid, "file_deleted", "file", file.ID, map[string]interface{}{"versions_deleted": len(versions)})
+    c.JSON(http.StatusOK, gin.H{"status": "ok", "versions_deleted": len(versions)})
 }
 
 func (h *R2FileOpsHandler) Download(c *gin.Context) {
@@ -682,6 +715,10 @@ func (h *R2FileOpsHandler) Download(c *gin.Context) {
 func (h *R2FileOpsHandler) ListVersions(c *gin.Context) {
     if h.DB == nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "database not configured"})
+        return
+    }
+    if h.R2 == nil {
+        c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage not configured"})
         return
     }
 
@@ -1081,4 +1118,185 @@ func sanitizeFilename(name string) string {
         return "download"
     }
     return n
+}
+
+// cleanupUploadSession cleans up R2 objects when a transaction fails
+func (h *R2FileOpsHandler) cleanupUploadSession(ctx context.Context, session *models.FileUploadSession, tx *gorm.DB) {
+    if h.R2 == nil {
+        return
+    }
+
+    // Delete the R2 object
+    if err := h.R2.DeleteObject(ctx, session.StoragePathR2); err != nil {
+        h.logError("failed to cleanup R2 object after failed transaction", err)
+    }
+
+    // Abort multipart upload if needed
+    if session.IsMultipart && session.R2UploadID != nil {
+        if err := h.R2.AbortMultipartUpload(ctx, session.StoragePathR2, *session.R2UploadID); err != nil {
+            h.logError("failed to abort multipart upload after failed transaction", err)
+        }
+    }
+
+    // Mark session as failed
+    if tx != nil {
+        msg := "transaction failed"
+        _ = tx.Model(&models.FileUploadSession{}).Where("id = ?", session.ID).
+            Updates(map[string]interface{}{"status": r2UploadStatusFailed, "last_error": msg}).Error
+    }
+}
+
+// FindOrphanedR2Objects finds R2 objects that have no corresponding database entries
+func (h *R2FileOpsHandler) FindOrphanedR2Objects(ctx context.Context, orgID uuid.UUID) ([]string, error) {
+    if h.R2 == nil {
+        return nil, r2.ErrNotConfigured
+    }
+
+    // Get all organization file paths from database
+    var filePaths []string
+    
+    // Get current file paths
+    var currentPaths []string
+    rows, err := h.DB.Model(&models.File{}).
+        Where("organization_id = ?", orgID).
+        Rows()
+    if err == nil {
+        defer rows.Close()
+        for rows.Next() {
+            var path string
+            if err := rows.Scan(&path); err == nil {
+                currentPaths = append(currentPaths, path)
+            }
+        }
+    }
+    
+    // Get all version paths
+    var versionPaths []string
+    rows2, err := h.DB.Model(&models.FileVersion{}).
+        Joins("JOIN files ON files.id = file_versions.file_id").
+        Where("files.organization_id = ?", orgID).
+        Rows()
+    if err == nil {
+        defer rows2.Close()
+        for rows2.Next() {
+            var path string
+            if err := rows2.Scan(&path); err == nil {
+                versionPaths = append(versionPaths, path)
+            }
+        }
+    }
+    
+    // Get all upload session paths (active/failed sessions)
+    var sessionPaths []string
+    rows3, err := h.DB.Model(&models.FileUploadSession{}).
+        Where("organization_id = ?", orgID).
+        Rows()
+    if err == nil {
+        defer rows3.Close()
+        for rows3.Next() {
+            var path string
+            if err := rows3.Scan(&path); err == nil {
+                sessionPaths = append(sessionPaths, path)
+            }
+        }
+    }
+    
+    filePaths = append(currentPaths, versionPaths...)
+    filePaths = append(filePaths, sessionPaths...)
+    
+    // Create a set for quick lookup
+    validPaths := make(map[string]bool)
+    for _, path := range filePaths {
+        validPaths[path] = true
+    }
+    
+    // List all R2 objects for this organization
+    prefix := fmt.Sprintf("organization/%s/files/", orgID.String())
+    r2Objects, err := h.R2.ListObjects(ctx, prefix)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Find orphaned objects
+    var orphaned []string
+    for _, obj := range r2Objects {
+        if !validPaths[obj] {
+            orphaned = append(orphaned, obj)
+        }
+    }
+    
+    return orphaned, nil
+}
+
+// CleanupOrphanedR2Objects removes R2 objects that have no database entries
+func (h *R2FileOpsHandler) CleanupOrphanedR2Objects(ctx context.Context, orgID uuid.UUID, auditUserID *uuid.UUID) (int, error) {
+    if h.R2 == nil {
+        return 0, r2.ErrNotConfigured
+    }
+
+    orphaned, err := h.FindOrphanedR2Objects(ctx, orgID)
+    if err != nil {
+        return 0, err
+    }
+
+    cleaned := 0
+    for _, path := range orphaned {
+        if err := h.R2.DeleteObject(ctx, path); err != nil {
+            h.logError("failed to delete orphaned R2 object", err)
+            continue
+        }
+        cleaned++
+    }
+
+    if auditUserID != nil && h.Audit != nil {
+        h.Audit.Log(auditUserID, "r2_orphan_cleanup", "storage", orgID, "", "", 
+            map[string]interface{}{
+                "objects_found": len(orphaned),
+                "objects_cleaned": cleaned,
+                "organization_id": orgID.String(),
+            })
+    }
+
+    return cleaned, nil
+}
+
+// PeriodicOrphanCleanupJob runs a cleanup job for all organizations
+func (h *R2FileOpsHandler) PeriodicOrphanCleanupJob(ctx context.Context) {
+    // Get all organizations
+    var orgs []models.Organization
+    if err := h.DB.Find(&orgs).Error; err != nil {
+        h.logError("failed to get organizations for orphan cleanup", err)
+        return
+    }
+
+    totalCleaned := 0
+    totalFound := 0
+
+    for _, org := range orgs {
+        h.Log.Info("Starting orphan cleanup for organization", zap.String("org_id", org.ID.String()))
+        
+        orphaned, err := h.FindOrphanedR2Objects(ctx, org.ID)
+        if err != nil {
+            h.logError("failed to find orphaned objects for org", err)
+            continue
+        }
+
+        totalFound += len(orphaned)
+        
+        cleaned, err := h.CleanupOrphanedR2Objects(ctx, org.ID, nil)
+        if err != nil {
+            h.logError("failed to cleanup orphaned objects for org", err)
+            continue
+        }
+
+        totalCleaned += cleaned
+        h.Log.Info("Completed orphan cleanup for organization", 
+            zap.String("org_id", org.ID.String()),
+            zap.Int("found", len(orphaned)),
+            zap.Int("cleaned", cleaned))
+    }
+
+    h.Log.Info("Periodic orphan cleanup job completed", 
+        zap.Int("total_orphaned_found", totalFound),
+        zap.Int("total_cleaned", totalCleaned))
 }
