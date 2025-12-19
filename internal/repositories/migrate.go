@@ -1,32 +1,32 @@
 package repositories
 
 import (
-    "citadel-drive/internal/models"
+	"citadel-drive/internal/models"
 
-    "gorm.io/gorm"
+	"gorm.io/gorm"
 )
 
 func EnsurePostgresExtensions(db *gorm.DB) error {
-    return db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto").Error
+	return db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto").Error
 }
 
 func AutoMigrate(db *gorm.DB) error {
-    return db.AutoMigrate(
-        &models.Organization{},
-        &models.User{},
-        &models.Folder{},
-        &models.File{},
-        &models.FileVersion{},
-        &models.FileUploadSession{},
-        &models.Permission{},
-        &models.UserPermission{},
-        &models.AuditLog{},
-        &models.Session{},
-        &models.TokenBlacklist{},
-        &models.UserBackupCode{},
-        &models.EncryptionKey{},
-        &models.SharedToken{},
-        &models.FileTag{},
-        &models.IPBlacklist{},
-    )
+	return db.AutoMigrate(
+		&models.Organization{},
+		&models.User{},
+		&models.Folder{},
+		&models.File{},
+		&models.FileVersion{},
+		&models.FileUploadSession{},
+		&models.Permission{},
+		&models.UserPermission{},
+		&models.AuditLog{},
+		&models.Session{},
+		&models.TokenBlacklist{},
+		&models.UserBackupCode{},
+		&models.EncryptionKey{},
+		&models.SharedToken{},
+		&models.FileTag{},
+		&models.IPBlacklist{},
+	)
 }

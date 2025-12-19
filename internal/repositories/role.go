@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	RoleOwner = "Owner"
+	RoleOwner  = "Owner"
 	RoleEditor = "Editor"
 	RoleViewer = "Viewer"
-	RoleGuest = "Guest"
-	RoleAdmin = "Admin"
+	RoleGuest  = "Guest"
+	RoleAdmin  = "Admin"
 )
 
 var AllRoles = []string{
